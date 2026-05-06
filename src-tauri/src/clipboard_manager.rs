@@ -721,14 +721,12 @@ impl ClipboardManager {
                 ) {
                     return Ok(());
                 }
-            } else {
-                if let Ok(()) = self.set_clipboard_external(
-                    "xclip",
-                    &["-selection", "clipboard", "-t", "UTF8_STRING"],
-                    text,
-                ) {
-                    return Ok(());
-                }
+            } else if let Ok(()) = self.set_clipboard_external(
+                "xclip",
+                &["-selection", "clipboard", "-t", "UTF8_STRING"],
+                text,
+            ) {
+                return Ok(());
             }
         }
 
@@ -749,15 +747,13 @@ impl ClipboardManager {
                     let _ = self.set_text_robust(plain);
                     return Ok(());
                 }
-            } else {
-                if let Ok(()) = self.set_clipboard_external(
-                    "xclip",
-                    &["-selection", "clipboard", "-t", "text/html"],
-                    html,
-                ) {
-                    let _ = self.set_text_robust(plain);
-                    return Ok(());
-                }
+            } else if let Ok(()) = self.set_clipboard_external(
+                "xclip",
+                &["-selection", "clipboard", "-t", "text/html"],
+                html,
+            ) {
+                let _ = self.set_text_robust(plain);
+                return Ok(());
             }
         }
 
