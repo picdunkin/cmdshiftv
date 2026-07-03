@@ -164,10 +164,11 @@ export function ClipboardTab(props: {
           setSearchQuery(e.key)
         } else {
           setSearchQuery((prev) => prev + e.key)
+          searchInputRef.current?.focus()
         }
       }
     },
-    [isSearchVisible, isPrintableKey]
+    [isSearchVisible, isPrintableKey, searchInputRef]
   )
 
   // Listen for Ctrl+F keybinding
@@ -265,9 +266,16 @@ export function ClipboardTab(props: {
     setFocusedIndex,
     historyItemRefs,
     tabBarRef,
+    searchInputRef,
     onUpFromFirstItem,
     onLeftArrow,
   })
+
+  // Reset focused index when filtered results change
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFocusedIndex(0)
+  }, [filteredHistory])
 
   // Ref for stable access to filtered history in event listener
   const filteredHistoryRef = useRef(filteredHistory)
@@ -374,26 +382,27 @@ export function ClipboardTab(props: {
                   )}
                 />
               </button>
-              {pinnedExpanded && pinnedItems.map((item, offset) => (
-                <HistoryItem
-                  key={item.id}
-                  ref={(el) => {
-                    historyItemRefs.current[offset] = el
-                  }}
-                  item={item}
-                  index={offset}
-                  isFocused={offset === focusedIndex}
-                  onPaste={onPaste}
-                  onDelete={deleteItem}
-                  onTogglePin={togglePin}
-                  onFocus={() => setFocusedIndex(offset)}
-                  isDark={isDark}
-                  secondaryOpacity={secondaryOpacity}
-                  isCompact={isCompact}
-                  enableSmartActions={settings.enable_smart_actions}
-                  enableUiPolish={settings.enable_ui_polish}
-                />
-              ))}
+              {pinnedExpanded &&
+                pinnedItems.map((item, offset) => (
+                  <HistoryItem
+                    key={item.id}
+                    ref={(el) => {
+                      historyItemRefs.current[offset] = el
+                    }}
+                    item={item}
+                    index={offset}
+                    isFocused={offset === focusedIndex}
+                    onPaste={onPaste}
+                    onDelete={deleteItem}
+                    onTogglePin={togglePin}
+                    onFocus={() => setFocusedIndex(offset)}
+                    isDark={isDark}
+                    secondaryOpacity={secondaryOpacity}
+                    isCompact={isCompact}
+                    enableSmartActions={settings.enable_smart_actions}
+                    enableUiPolish={settings.enable_ui_polish}
+                  />
+                ))}
               {unpinnedItems.length > 0 && (
                 <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
                   <History size={12} />
