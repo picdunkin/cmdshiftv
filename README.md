@@ -3,11 +3,15 @@
 <img width="52" height="52" alt="logo" src="https://github.com/user-attachments/assets/4534e915-5d83-45f3-9f09-48a0f94b1d9a" />
 
 
-# Windows 11 Clipboard History For Linux
+# Windows 11 Clipboard History for macOS
 
-[Website](https://clipboard.gustavosett.dev) • [Report Bug](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/issues) • [Request Feature](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/discussions/new?category=ideas)
+[Report Bug](https://github.com/picdunkin/cmdshiftv/issues) • [Original Project](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux)
 
-**The aesthetic, feature-rich clipboard manager your Linux desktop deserves.**
+**The aesthetic, feature-rich clipboard manager, ported to the Mac.**
+
+A macOS port of [Windows 11 Clipboard History For Linux](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux) by [@gustavosett](https://github.com/gustavosett) — all credit for the original design and implementation goes to the upstream project.
+
+> 🚧 **Work in progress** — the macOS port is underway. Until it lands, the instructions below still describe the original Linux app.
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Total Downloads](https://img.shields.io/endpoint?url=https://clipboard.gustavosett.workers.dev/&style=for-the-badge&logo=cloudsmith&logoColor=white)](https://broadcasts.cloudsmith.com/gustavosett/clipboard-manager)
