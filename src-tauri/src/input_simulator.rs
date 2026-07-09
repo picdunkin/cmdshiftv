@@ -1,3 +1,14 @@
+//! Input Simulation Module
+//!
+//! On Linux this drives paste via xdotool / XTest / uinput. On macOS the real
+//! paste path is CGEvent ⌘V synthesis (ticket 10); until that lands,
+//! `simulate_paste_keystroke` is a stub that reports "not yet implemented".
+
+#[cfg(not(target_os = "macos"))]
+pub use x11_impl::*;
+
+#[cfg(not(target_os = "macos"))]
+mod x11_impl {
 use crate::session;
 use std::thread;
 use std::time::Duration;
@@ -269,4 +280,14 @@ fn simulate_paste_uinput() -> Result<(), String> {
     thread::sleep(Duration::from_millis(POST_PASTE_DELAY_MS));
 
     Ok(())
+}
+} // mod x11_impl
+
+/// macOS paste stub. The real implementation — non-activating `NSPanel` +
+/// CGEvent ⌘V synthesis — is ticket 10. Until then, callers surface this error
+/// (the clipboard content is still copied; only the auto-paste keystroke is
+/// missing), which keeps the app launchable without silently no-op'ing.
+#[cfg(target_os = "macos")]
+pub fn simulate_paste_keystroke() -> Result<(), String> {
+    Err("macOS paste injection not yet implemented (ticket 10)".to_string())
 }

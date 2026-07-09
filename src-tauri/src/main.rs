@@ -322,6 +322,38 @@ impl PasteHelper {
 
 // --- Window Controller (Visibility & Positioning) ---
 
+/// Force the picker to the foreground on macOS, including over a fullscreen app's
+/// Space. Tauri's `show()`/`set_always_on_top()` leave the window on the desktop
+/// Space, so when the user is in a native-fullscreen app (e.g. an editor) the
+/// picker opens on a *different* Space and is never seen. The fix is the native
+/// `NSWindowCollectionBehavior::FullScreenAuxiliary` flag (Tauri only sets
+/// `CanJoinAllSpaces`, which is not sufficient), a floating window level, and
+/// `orderFrontRegardless`. Runs on the main thread — AppKit requires it.
+#[cfg(target_os = "macos")]
+fn macos_force_front(window: &WebviewWindow) {
+    use objc2_app_kit::{NSPopUpMenuWindowLevel, NSWindow, NSWindowCollectionBehavior};
+
+    let win = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let ptr = match win.ns_window() {
+            Ok(p) if !p.is_null() => p,
+            _ => {
+                eprintln!("[macos_force_front] ns_window() unavailable");
+                return;
+            }
+        };
+        // SAFETY: ns_window() hands back this window's NSWindow*, valid to use on
+        // the main thread, which run_on_main_thread guarantees we are on.
+        let ns_window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        ns_window.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+        ns_window.setLevel(NSPopUpMenuWindowLevel);
+        ns_window.orderFrontRegardless();
+    });
+}
+
 struct WindowController;
 
 impl WindowController {
@@ -385,6 +417,26 @@ impl WindowController {
     }
 
     fn position_and_show(window: &WebviewWindow, app: &AppHandle) {
+        // macOS interim (ticket 09): make the picker reliably visible. Center it
+        // on the active screen, force it above other apps, show, and focus so it
+        // isn't left behind the frontmost window. Cursor-anchored placement and
+        // the non-activating NSPanel behavior are ticket 10 / the window-behavior
+        // fog; this just guarantees the UI actually appears.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window.center();
+            let _ = window.show();
+            let _ = window.set_focus();
+            // Native AppKit ordering: joins the current Space even over a
+            // fullscreen app, raises to popup level, and orders front. This is
+            // the piece Tauri can't express (see macos_force_front).
+            macos_force_front(window);
+            let _ = app.emit("window-shown", ());
+            return;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
         let state = app.state::<AppState>();
 
         if is_wayland() {
@@ -429,6 +481,7 @@ impl WindowController {
 
             let _ = app_clone.emit("window-shown", ());
         });
+        }
     }
 
     /// Activate window on X11 using xdotool (fallback method)
@@ -520,6 +573,9 @@ impl WindowController {
             return Some((pos.x as i32, pos.y as i32));
         }
 
+        // X11/xdotool cursor fallbacks. On macOS Tauri's `cursor_position()`
+        // above already covers this, and neither xdotool nor x11rb is available.
+        #[cfg(not(target_os = "macos"))]
         {
             if let Some(p) = Self::get_cursor_xdotool() {
                 return Some(p);
@@ -532,6 +588,7 @@ impl WindowController {
         None
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn get_cursor_xdotool() -> Option<(i32, i32)> {
         let output = std::process::Command::new("xdotool")
             .args(["getmouselocation", "--shell"])
@@ -555,6 +612,7 @@ impl WindowController {
         x.zip(y)
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn get_cursor_x11() -> Option<(i32, i32)> {
         use x11rb::connection::Connection;
         use x11rb::protocol::xproto::ConnectionExt;
@@ -916,6 +974,15 @@ fn main() {
                     }
                 }
                 WindowEvent::Focused(false) => {
+                    // macOS interim: do NOT auto-hide the picker on focus loss.
+                    // As a normal window (not yet the non-activating NSPanel of
+                    // ticket 10), showing it activates the app and any focus
+                    // shuffle would instantly hide it again — so the picker never
+                    // stays on screen. Keep it visible until it's explicitly
+                    // toggled/hidden. Revisit when the NSPanel lands (ticket 10).
+                    #[cfg(target_os = "macos")]
+                    return;
+                    #[allow(unreachable_code)]
                     let state = w_clone.state::<AppState>();
                     if state.is_mouse_inside.load(Ordering::Relaxed) {
                         return;
@@ -943,6 +1010,7 @@ fn main() {
                 }
                 _ => {}
             });
+
 
             start_clipboard_watcher(app_handle.clone(), clipboard_manager.clone());
 

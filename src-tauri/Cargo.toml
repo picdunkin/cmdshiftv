@@ -21,7 +21,7 @@ tauri-build = { version = "2.6.0", features = [] }
 
 [dependencies]
 # Tauri Core
-tauri = { version = "2.11.0", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.11.0", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-shell = "2"
 
 # Clipboard Management - wayland-data-control for native Wayland support
@@ -59,16 +59,18 @@ whoami = "2.1.2"
 # URL encoding for LXQt shortcuts
 percent-encoding = "2.3"
 
-# X11 Simulation for paste injection
-x11rb = { version = "0.13", features = ["allow-unsafe-code", "xtest"] }
 libc = "0.2"
-gtk = "0.18"
 # D-Bus for XDG Desktop Portal (theme detection for COSMIC and other DEs)
 zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 futures-lite = "2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.3.2", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSPasteboard", "NSPasteboardItem", "NSWindow", "NSResponder", "NSApplication"] }
+
+# X11 paste-injection / focus / cursor path — Linux only.
+# macOS uses CGEvent/NSWorkspace (ticket 10); these modules are stubbed there.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "xtest"] }
 
 [features]
 default = ["custom-protocol"]

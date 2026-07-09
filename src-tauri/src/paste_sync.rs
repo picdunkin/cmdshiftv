@@ -18,15 +18,20 @@
 use crate::session;
 use std::thread;
 use std::time::{Duration, Instant};
-use x11rb::protocol::xproto::ConnectionExt;
 
 /// Polling interval for all waiters. Cheap X11 round-trips (~0.1ms each).
 const POLL_INTERVAL: Duration = Duration::from_millis(3);
 
+/// "No selection owner" sentinel (the value of `x11rb::NONE`). Kept local so
+/// the settle helpers don't reference `x11rb`, which isn't linked on macOS.
+const X11_NONE: u32 = 0;
+
 /// Returns the current owner window of the CLIPBOARD selection,
 /// or `None` when it cannot be determined (non-X11, connection failure).
-/// `Some(0)` (x11rb::NONE) means "no owner".
+/// `Some(0)` (X11_NONE) means "no owner".
+#[cfg(not(target_os = "macos"))]
 pub fn clipboard_owner() -> Option<u32> {
+    use x11rb::protocol::xproto::ConnectionExt;
     if !session::is_x11() {
         return None;
     }
@@ -39,6 +44,14 @@ pub fn clipboard_owner() -> Option<u32> {
         .atom;
     let owner = conn.get_selection_owner(atom).ok()?.reply().ok()?.owner;
     Some(owner)
+}
+
+/// macOS has no X11 selection owner. The clipboard-settle waiters degrade to
+/// their full sleep budget, which is harmless: the arboard/NSPasteboard write
+/// is already verified upstream before these are called.
+#[cfg(target_os = "macos")]
+pub fn clipboard_owner() -> Option<u32> {
+    None
 }
 
 /// Wait (at most `budget`) for the X11 input focus to land on
@@ -85,7 +98,7 @@ pub fn settle_clipboard_handoff(owner_before: Option<u32>, budget: Duration) -> 
             None => return PollState::Unverifiable,
         };
         match clipboard_owner() {
-            Some(owner) if owner != x11rb::NONE && owner != before => PollState::Confirmed,
+            Some(owner) if owner != X11_NONE && owner != before => PollState::Confirmed,
             Some(_) => PollState::Pending,
             None => PollState::Unverifiable,
         }
@@ -104,7 +117,7 @@ pub fn settle_clipboard_handoff(owner_before: Option<u32>, budget: Duration) -> 
 pub fn settle_clipboard_owned(budget: Duration) -> bool {
     let start = Instant::now();
     let confirmed = poll_until(budget, || match clipboard_owner() {
-        Some(owner) if owner != x11rb::NONE => PollState::Confirmed,
+        Some(owner) if owner != X11_NONE => PollState::Confirmed,
         Some(_) => PollState::Pending,
         None => PollState::Unverifiable,
     });
@@ -149,8 +162,17 @@ fn sleep_remaining(start: Instant, budget: Duration) {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn focused_window() -> Option<u32> {
+    use x11rb::protocol::xproto::ConnectionExt;
     let (conn, _) = x11rb::connect(None).ok()?;
     let reply = conn.get_input_focus().ok()?.reply().ok()?;
     Some(reply.focus)
+}
+
+/// macOS: focus is never taken by the picker (non-activating panel, ticket 10),
+/// so there is nothing to poll. `settle_focus` treats this as unverifiable.
+#[cfg(target_os = "macos")]
+fn focused_window() -> Option<u32> {
+    None
 }

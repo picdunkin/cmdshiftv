@@ -1,7 +1,16 @@
 //! Focus Manager Module
 //! Tracks and restores window focus for proper paste injection on X11.
 //! Also provides X11 window activation using EWMH protocols.
+//!
+//! This entire module is X11-specific. On macOS the picker never steals focus
+//! (non-activating `NSPanel`, ticket 10), so the public entry points are no-op
+//! stubs; the real X11 implementation is compiled only off macOS.
 
+#[cfg(not(target_os = "macos"))]
+pub use x11_impl::*;
+
+#[cfg(not(target_os = "macos"))]
+mod x11_impl {
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -315,5 +324,35 @@ pub fn x11_robust_activate(title: &str) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+} // mod x11_impl
+
+// =============================================================================
+// macOS stubs — the picker uses a non-activating panel and never manipulates
+// focus, so these are intentional no-ops. Real focus handling (if any is ever
+// needed) belongs to the CGEvent paste path (ticket 10).
+// =============================================================================
+
+#[cfg(target_os = "macos")]
+pub fn save_focused_window() {}
+
+#[cfg(target_os = "macos")]
+pub fn restore_focused_window() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_focused_window() -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+pub fn x11_activate_window_by_title(_title: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn x11_robust_activate(_title: &str) -> Result<(), String> {
     Ok(())
 }

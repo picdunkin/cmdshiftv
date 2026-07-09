@@ -40,5 +40,5 @@
     "global-shortcut:allow-unregister-all",
     "core:webview:allow-set-webview-zoom"
   ],
-  "platforms": ["linux"]
+  "platforms": ["linux", "macOS"]
 }
