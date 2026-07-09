@@ -1,26 +1,24 @@
 //! GIF Manager
 //! Handles downloading GIFs and preparing them for clipboard paste.
 //!
-//! IMPORTANT: This module handles specific OS-level clipboard commands (wl-copy/xclip)
-//! to ensure GIFs are pasted as files (text/uri-list) rather than raw bytes or text.
-//! This is required for rich media pasting in apps like Discord/Chrome on Linux.
+//! IMPORTANT: The GIF is placed on the clipboard **as a file** (an NSPasteboard
+//! file-URL write, the macOS equivalent of Linux's `text/uri-list`) rather than
+//! as raw bytes or text. This is required for rich media pasting: Finder copies
+//! the file, and Chromium/Electron apps (Discord, Slack) surface it as a file
+//! attachment, preserving the animation.
 
-use crate::session;
 use arboard::Clipboard;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 // --- Constants ---
 
 const APP_CACHE_DIR: &str = "win11-clipboard-history/gifs";
-const MIME_URI_LIST: &str = "text/uri-list";
 const DOWNLOAD_TIMEOUT: u64 = 10;
-const WL_COPY_SETTLE_TIME: u64 = 150;
 
 // --- Cache Management ---
 
@@ -28,6 +26,7 @@ struct GifCache;
 
 impl GifCache {
     /// Get (and create if missing) the cache directory.
+    /// `dirs::cache_dir()` resolves to `~/Library/Caches` on macOS.
     fn get_dir() -> Result<PathBuf, String> {
         let cache_dir = dirs::cache_dir()
             .ok_or("Failed to resolve system cache directory")?
@@ -98,101 +97,39 @@ impl Downloader {
 struct ClipboardHandler;
 
 impl ClipboardHandler {
-    /// Constructs the file URI string (file:///path/to/file).
-    fn make_file_uri(path: &Path) -> String {
-        format!("file://{}\n", path.to_string_lossy())
-    }
-
-    /// Uses `wl-copy` to set clipboard on Wayland.
+    /// Puts the file on the general pasteboard as a file URL (`public.file-url`),
+    /// so paste targets receive the actual .gif file — the macOS equivalent of
+    /// the upstream `text/uri-list` write on Linux.
     ///
-    /// CRITICAL: wl-copy forks to background to serve the paste request.
-    /// We must write to its stdin, then let it detach.
-    fn copy_wayland(path: &Path) -> Result<(), String> {
-        let uri = Self::make_file_uri(path);
+    /// Deliberately writes ONLY the file-URL representation (no raw image data):
+    /// apps that prefer image data would otherwise paste a static first frame
+    /// instead of attaching the animated file.
+    fn copy_file_url(path: &Path) -> Result<(), String> {
+        use objc2::rc::autoreleasepool;
+        use objc2::runtime::ProtocolObject;
+        use objc2_app_kit::NSPasteboard;
+        use objc2_foundation::{NSArray, NSString, NSURL};
 
-        // Env vars are strictly required for wl-copy context
-        let display =
-            std::env::var("WAYLAND_DISPLAY").map_err(|_| "WAYLAND_DISPLAY not set".to_string())?;
-        let runtime_dir =
-            std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR not set".to_string())?;
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| "GIF cache path is not valid UTF-8".to_string())?;
 
-        eprintln!("[GifManager] Executing wl-copy ({})", MIME_URI_LIST);
+        eprintln!("[GifManager] Writing file URL to NSPasteboard");
 
-        let mut child = Command::new("wl-copy")
-            .env("WAYLAND_DISPLAY", display)
-            .env("XDG_RUNTIME_DIR", runtime_dir)
-            .args(["--type", MIME_URI_LIST])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn wl-copy: {}", e))?;
+        autoreleasepool(|_| {
+            let url = unsafe { NSURL::fileURLWithPath(&NSString::from_str(path_str)) };
+            let objects = NSArray::from_retained_slice(&[ProtocolObject::from_retained(url)]);
 
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(uri.as_bytes())
-                .map_err(|e| format!("Pipe write error: {}", e))?;
-        }
+            let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
+            unsafe { pasteboard.clearContents() };
+            let written = unsafe { pasteboard.writeObjects(&objects) };
 
-        // Wait briefly for wl-copy to initialize logic, but don't wait for exit
-        // as it stays alive to serve the clipboard.
-        std::thread::sleep(Duration::from_millis(WL_COPY_SETTLE_TIME));
-
-        // Check if it crashed immediately
-        match child.try_wait() {
-            Ok(Some(status)) if !status.success() => {
-                let stderr = child
-                    .wait_with_output()
-                    .ok()
-                    .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
-                    .unwrap_or_else(|| "Unknown error".into());
-                Err(format!("wl-copy crashed: {}", stderr))
-            }
-            Ok(_) => {
-                eprintln!("[GifManager] wl-copy running in background");
+            if written {
                 Ok(())
+            } else {
+                Err("NSPasteboard writeObjects returned false".to_string())
             }
-            Err(e) => Err(format!("Process status check failed: {}", e)),
-        }
-    }
-
-    /// Uses `xclip` to set clipboard on X11.
-    ///
-    /// CRITICAL: We spawn xclip and detach the thread so it persists.
-    fn copy_x11(path: &Path) -> Result<(), String> {
-        let uri = Self::make_file_uri(path);
-        let display = std::env::var("DISPLAY").map_err(|_| "DISPLAY not set".to_string())?;
-
-        eprintln!("[GifManager] Executing xclip ({})", MIME_URI_LIST);
-
-        let mut child = Command::new("xclip")
-            .env("DISPLAY", display)
-            .args([
-                "-selection",
-                "clipboard",
-                "-t",
-                MIME_URI_LIST,
-                "-loops",
-                "0",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn xclip: {}", e))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(uri.as_bytes())
-                .map_err(|e| format!("Pipe write error: {}", e))?;
-        }
-
-        // Detach to allow xclip to serve requests indefinitely
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-
-        Ok(())
+        })
     }
 
     /// Fallback: Just put the text URL on the clipboard.
@@ -224,12 +161,6 @@ pub fn download_gif_to_file(url: &str) -> Result<PathBuf, String> {
 /// Ok(Some(url)) if fallback used,
 /// Err if everything failed.
 pub fn paste_gif_to_clipboard_with_uri(url: &str) -> Result<Option<String>, String> {
-    let is_wayland = session::is_wayland();
-    eprintln!(
-        "[GifManager] Mode: {}",
-        if is_wayland { "Wayland" } else { "X11" }
-    );
-
     // 1. Attempt Download
     let gif_path = match download_gif_to_file(url) {
         Ok(path) => path,
@@ -241,18 +172,8 @@ pub fn paste_gif_to_clipboard_with_uri(url: &str) -> Result<Option<String>, Stri
     };
 
     // 2. Attempt Copy
-    let copy_result = if is_wayland {
-        ClipboardHandler::copy_wayland(&gif_path).or_else(|e| {
-            eprintln!("[GifManager] Wayland copy failed ({}), trying X11...", e);
-            ClipboardHandler::copy_x11(&gif_path)
-        })
-    } else {
-        ClipboardHandler::copy_x11(&gif_path)
-    };
-
-    // 3. Handle Result
-    match copy_result {
-        Ok(_) => {
+    match ClipboardHandler::copy_file_url(&gif_path) {
+        Ok(()) => {
             let uri = format!("file://{}", gif_path.to_string_lossy());
             Ok(Some(uri))
         }
