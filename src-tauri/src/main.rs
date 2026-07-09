@@ -110,11 +110,7 @@ fn set_user_settings(
     // Refresh tray icon immediately to reflect possible dynamic setting change
     theme_manager::update_dynamic_tray_flag(new_settings.enable_dynamic_tray_icon);
 
-    let app_for_tray = app.clone();
-    let settings_for_tray = new_settings.clone();
-    tauri::async_runtime::spawn(async move {
-        theme_manager::refresh_tray_icon(&app_for_tray, &settings_for_tray).await;
-    });
+    theme_manager::refresh_tray_icon(&app, &new_settings);
 
     Ok(())
 }
@@ -128,23 +124,24 @@ fn is_settings_window_visible(app: AppHandle) -> bool {
 
 // --- Theme Detection Commands ---
 
-/// Get system color scheme from XDG Desktop Portal (supports COSMIC and other modern DEs)
+/// Get the system color scheme (macOS appearance, cached from Tauri's theme).
 #[tauri::command]
-async fn get_system_theme() -> ThemeInfo {
-    theme_manager::get_system_color_scheme().await
+fn get_system_theme() -> ThemeInfo {
+    theme_manager::get_system_color_scheme()
 }
 
-/// Clear the cached theme value (useful when system theme might have changed)
+/// Re-read the current appearance from the window and refresh the cache.
 #[tauri::command]
-async fn refresh_system_theme() -> ThemeInfo {
-    theme_manager::clear_theme_cache().await;
-    theme_manager::get_system_color_scheme().await
+fn refresh_system_theme(app: AppHandle) -> ThemeInfo {
+    theme_manager::seed_from_window(&app)
 }
 
-/// Check if the D-Bus event listener is running for theme changes
+/// Whether live theme-change events are delivered without frontend polling.
+/// On macOS this is always true — Tauri emits `system-theme-changed` from the
+/// system `AppleInterfaceThemeChangedNotification` observer.
 #[tauri::command]
 fn is_theme_listener_active() -> bool {
-    theme_manager::is_event_listener_running()
+    true
 }
 
 #[tauri::command]
@@ -937,13 +934,11 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Update icon asynchronously if dynamic is enabled (to fix the initial default icon)
+            // Seed the appearance cache from the live window (so get_system_theme
+            // returns a real value) and paint the dynamic tray icon to match.
+            theme_manager::seed_from_window(app.handle());
             if settings.enable_dynamic_tray_icon {
-                 let app_handle_bg = app.handle().clone();
-                 let settings_bg = settings.clone();
-                 tauri::async_runtime::spawn(async move {
-                    theme_manager::refresh_tray_icon(&app_handle_bg, &settings_bg).await;
-                 });
+                theme_manager::refresh_tray_icon(app.handle(), &settings);
             }
 
             // Verify that settings window was created from config
@@ -1008,23 +1003,17 @@ fn main() {
                     let state = w_clone.state::<AppState>();
                     handle_window_moved_for_wayland(&w_clone, &state, pos);
                 }
+                // System appearance changed. tao delivers this from the
+                // AppleInterfaceThemeChangedNotification observer — refresh the
+                // cache, notify the frontend, and swap the tray icon.
+                WindowEvent::ThemeChanged(theme) => {
+                    theme_manager::apply_theme_change(&app_handle_for_event, *theme);
+                }
                 _ => {}
             });
 
 
             start_clipboard_watcher(app_handle.clone(), clipboard_manager.clone());
-
-            // Start theme change listener (D-Bus event-based, more efficient than polling)
-            {
-                let app_handle_for_theme = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) =
-                        theme_manager::start_theme_listener(app_handle_for_theme).await
-                    {
-                        eprintln!("[ThemeManager] Failed to start theme listener: {}", e);
-                    }
-                });
-            }
 
             // If --settings flag was passed on first startup, open the settings window
             if open_settings_on_start {

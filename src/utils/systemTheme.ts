@@ -4,8 +4,8 @@ import { listen } from '@tauri-apps/api/event'
 import type { ThemeInfo } from '../types/clipboard'
 
 /**
- * Query the backend for system color scheme via XDG Desktop Portal.
- * This works with COSMIC, GNOME, KDE, and other portal-compliant DEs.
+ * Query the backend for the current system color scheme.
+ * The backend reads the macOS appearance via Tauri's built-in theme.
  */
 export async function getSystemThemeFromPortal(): Promise<boolean | null> {
   try {
@@ -22,8 +22,10 @@ export async function getSystemThemeFromPortal(): Promise<boolean | null> {
 
 /**
  * Hook for detecting system dark mode preference.
- * Uses CSS media query with XDG Desktop Portal fallback for COSMIC DE and others.
- * Listens for D-Bus theme change events, with polling fallback (30s) if events unavailable.
+ * Uses the CSS media query as the primary source, backed by the macOS appearance
+ * reported by the backend. Live changes arrive via the `system-theme-changed`
+ * event (emitted from the macOS appearance-changed notification); a polling
+ * fallback only runs if that event stream is ever reported inactive.
  */
 export function useSystemThemePreference(): boolean {
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => {
@@ -34,7 +36,7 @@ export function useSystemThemePreference(): boolean {
   })
   const hasCheckedPortal = useRef(false)
 
-  // Check XDG portal for initial theme (handles COSMIC and other DEs)
+  // Check the backend for the initial macOS appearance
   useEffect(() => {
     if (hasCheckedPortal.current) return
     hasCheckedPortal.current = true
@@ -56,7 +58,7 @@ export function useSystemThemePreference(): boolean {
     return () => mediaQuery.removeEventListener('change', handleChange)
   }, [])
 
-  // Listen for theme change events from the backend (D-Bus signals)
+  // Listen for theme change events from the backend (macOS appearance changes)
   useEffect(() => {
     const unlistenPromise = listen<ThemeInfo>('system-theme-changed', (event) => {
       const themeInfo = event.payload
@@ -68,8 +70,8 @@ export function useSystemThemePreference(): boolean {
     }
   }, [])
 
-  // Polling fallback: Only poll if D-Bus event listener is not active
-  // This handles DEs that don't support portal signals or if the listener failed
+  // Polling fallback: only poll if the backend reports the theme-change event
+  // stream as inactive (on macOS it is always active, so this never runs)
   useEffect(() => {
     let checkInterval: number | null = null
 
